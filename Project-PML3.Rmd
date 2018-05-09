@@ -1,0 +1,221 @@
+---
+title: Practical Machine Learning - Classifying Correct Exercise Technique from Personal
+  Device Data
+author: "S Carroll"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+## Background
+"Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify **how well** they do it. In this project, the goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways." [^1]
+
+"Six young healthy participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Class A is the correct execution, and the other classess correspond to common mistakes."[^2] 
+
+## Data
+The dataset was provided by Ugulino, Cardaror, et. al.[^3], and is available from this source.[^2]  The dataset contains 19622 observations in the training and 20 observations in the testing set.  Columns majorly populated with data include 13 features for each of four devices worn on the belt, arm, dumbbell, and forearm (52 total).  These features are measurements corresponding to roll, pitch, yaw, total acceleration, and triaxial device data from the gyros, accelerometers, and magnetometers. Other columns include information on subjectID, time/window, and the outcome. The outcome is 'classe'. 
+
+## Summary
+
+### How the Model Was Built and Reasons for Choices
+Three methods were used to fit the outcome (classe) to a set of 52 predictors: random forest, boosting with trees, and linear discriminant analysis, using the train function of the caret package. Default parameters were chosen, which included a 5-fold resampling. Accuracy was assessed from the prediction of the models individually and collectively, and the most accurate model (rf) was chosen. Additionally, the data did not appear to be linear, and the random forest method is robust for non-linear data. 
+
+Two potential sources of noise were evaluated in the initial examination of data.  These include subjects not performing the same number of tests, and differences in the time windows. As the model fit was very good, these potential noise sources did not require further evaluation. 
+
+### Cross Validation and Expected Out of Sample Error
+The training data was partitioned in a 60/40 split to allow for training and to predict testing results. In-sample variation was obtained from model fit data, and was cross-validated by using predicted values from the test portion of the training data. The expected out-of-sample error is defined as 1-accuracy of the prediction from the test portion of the data, and is less than 0.8%.
+
+
+## Code
+
+### Preliminaries
+#### Libraries
+```{r nuisance, include=FALSE}
+suppressWarnings(library(data.table))
+suppressWarnings(library(dplyr))
+suppressWarnings(library(ggplot2))
+suppressWarnings(library(caret))
+suppressWarnings(library(doParallel))
+suppressWarnings(library(parallel))
+suppressWarnings(library(randomForest))
+```
+
+```{r libs}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(doParallel)
+library(parallel)
+library(randomForest)
+
+```
+
+Due to the computational intensity, code for accessing n-1 cores is used to speed processing time.[^5] 
+```{r parallel}
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv", number = 5, allowParallel = TRUE)
+
+# To invoke, add arg to train(... trControl = fitControl ).  De-register after modelling 
+
+```
+
+
+#### Preprocess Data (Obtain, Examine, Clean, and Partition Data)
+Obtain the data. 
+```{r obtaindata}
+trainURL <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+testURL <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+
+if(!file.exists("./data")){dir.create("./data")}
+if(!file.exists("./data/training.csv")){download.file(trainURL,destfile="./data/training.csv")}
+if(!file.exists("./data/testing.csv")){download.file(trainURL,destfile="./data/testing.csv")}
+
+training <- as.data.table(fread('./data/training.csv', na.strings = c("NA","#DIV/0!","")))
+testing <- as.data.table(fread('./data/testing.csv', na.strings = c("NA","#DIV/0!","")))
+```
+
+Examine the data.
+```{r examdata}
+rbind(c('training',dim(training)),c('testing',dim(testing)))
+
+# sampling is not balanced by user and exercise class
+table(training$user_name,training$classe)
+
+# number of observations per window is not uniform
+x <- table(training$num_window)
+hist(x, main = "Number of observations per window", breaks = max(x))
+
+# make classe variable is a factor
+training$classe <-factor(training$classe)
+
+```
+
+Clean the data.
+```{r cleandata, cache = TRUE}
+colNotKeep <- c(1:7)  # studyv, names, date/time
+
+# columns with 90% or more missing data
+thresh <- length(training)*0.90
+badCol <- apply(training, 2, function(x) sum(is.na(x)) > thresh  || sum(x=="") > thresh)
+sum(badCol) # 100 columns with missing data
+# what are these
+badColName <- names(training[,badCol, with = FALSE])
+# what is kept
+keptColName <- names(training[,!badCol, with = FALSE])
+
+# columns with near zero variance 
+nzv <- nearZeroVar(training, saveMetrics = TRUE)   # already contained in badCol
+
+# select kept columns and clean data
+colNotKeep <- unique(as.numeric(c(colNotKeep, which(badCol),which(nzv$nzv==TRUE))))
+
+training <- training[,!colNotKeep, with = FALSE]
+testing <- testing[,!colNotKeep, with = FALSE]
+
+```
+
+Partition the training data to allow cross-validation
+```{r partition, cache=TRUE}
+set.seed(05072)
+inTrain <- createDataPartition(training$classe, p = 0.6, list = FALSE)
+myTrain <- training[inTrain,]  
+myTest <- training[-inTrain,] 
+
+rbind(c('myTrain',dim(myTrain)),c('myTest',dim(myTest)))
+
+```
+
+### Model, Prediction and Figures of Merit
+Build models from the train portion of the training set. The data below show that the random forest method yields the highest accuracy.  The top 5 most influential predictors are shown. 
+
+```{r buildmodel, cache = TRUE}
+set.seed(62433)
+
+# train models 
+modRF <- train(classe ~ ., method="rf",data=myTrain,verbose=FALSE,trControl = fitControl)
+modGBM <- train(classe ~ ., method="gbm",data=myTrain,verbose=FALSE,trControl = fitControl)
+modLDA <- train(classe ~ ., method="lda",data=myTrain,verbose=FALSE,trControl = fitControl)
+
+# examine  fit metrics from modelling provided by train()
+modRF
+modGBM
+modLDA
+
+# examine importance of predictors for random forest method
+impRF <- modRF$finalModel$importance[order(modRF$finalModel$importance[,1], decreasing = TRUE),]
+impRF[1:5]
+```
+
+Predict in-sample error. These results also indicate that the random forest method is best.  It is not improved by combining with other models. 
+```{r insampleError, cache = TRUE}
+# predict using individual and combined models
+predRFi <- predict(modRF, myTrain)
+predGBMi <- predict(modGBM, myTrain)
+predLDAi <- predict(modLDA, myTrain)
+
+predDfi <- data.frame(predRFi, predGBMi,predLDAi, classe = myTrain$classe)
+predDfi2 <- data.frame(predRFi, predGBMi, classe = myTrain$classe)
+
+combModelFiti <- train(classe ~ ., method = 'rf', data = predDfi,trControl = fitControl)
+combModelFiti2 <- train(classe ~ ., method = 'rf', data = predDfi2,trControl = fitControl)
+
+predCombi <- predict(combModelFiti, predDfi)
+predCombi2 <- predict(combModelFiti2, predDfi2)
+
+confuMati <- function(pred) {confusionMatrix(pred, myTrain$classe)[2:3]}
+
+confuMati(predRFi)
+confuMati(predGBMi)
+confuMati(predLDAi)
+confuMati(predCombi)
+confuMati(predCombi2)
+
+```
+For the final model using random forest, 500 trees were used.  The error as a function of the number of trees is shown below.  The accuracy increases with additional trees, but the error is still small for a smaller number of trees (~100).  This could simplify the interpretability of predictors. 
+
+```{r treeError, fig.width = 5, fig.height = 3}
+plot(modRF$finalModel, main = "Classification Tree")
+```
+
+Predict the out-of-sample error using the reserved data from the training set. The accuracy is highest for the random forest method.  
+
+```{r outOfSamplePred, cache = TRUE}
+
+predRF <- predict(modRF, myTest)
+predGBM <- predict(modGBM, myTest)
+predLDA <- predict(modLDA, myTest)
+
+confuMat <- function(pred) {confusionMatrix(pred, myTest$classe)$overall[1]}
+# accuracy
+rbind(c('predRF',confuMat(predRF)),c('predGBM',confuMat(predGBM)),c('predLDA',confuMat(predLDA) ))
+
+# results for best
+confusionMatrix(predRF, myTest$classe)
+
+```
+
+The models are applied to the testing data.
+```{r testingBlind}
+x <- testing
+predict(modRF, newdata=x)
+
+```
+
+#### Cleanup
+
+```{r dereg}
+# de-register parallel processing cluster and return to single threaded processing
+stopCluster(cluster)  
+registerDoSEQ()
+```
+
+### References
+[^1]: Coursera Data Science Course, Practical Machine Learning, accessed 5/2018.
+[^2]: http://groupware.les.inf.puc-rio.br/har 
+[^3]: UVelloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013. 
+[^5]: Greski, L., https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md, accessed 5/2018.
+

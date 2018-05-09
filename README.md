@@ -21,4 +21,12 @@ Two potential sources of noise were evaluated in the initial examination of data
 ### Cross Validation and Expected Out of Sample Error
 The training data was partitioned in a 60/40 split to allow for training and to predict testing results. In-sample variation was obtained from model fit data, and was cross-validated by using predicted values from the test portion of the training data. The expected out-of-sample error is defined as 1-accuracy of the prediction from the test portion of the data, and is less than 0.8%.
 
+* Please see project file for code and additional information *
+
+### References
+[^1]: Coursera Data Science Course, Practical Machine Learning, accessed 5/2018.
+[^2]: http://groupware.les.inf.puc-rio.br/har 
+[^3]: UVelloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013. 
+[^5]: Greski, L., https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md, accessed 5/2018.
+
 
